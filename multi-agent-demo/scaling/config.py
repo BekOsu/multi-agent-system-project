@@ -12,9 +12,14 @@ AGENT_TOKEN_LIMITS: dict[str, int] = {
 # Total token budget per job
 JOB_TOKEN_BUDGET: int = 200_000
 
+# Fallback model chain — tried in order on API errors
+MODEL_CHAIN: list[str] = ["gpt-4o-mini", "gpt-4o", "gpt-3.5-turbo"]
+
 # Model pricing per 1M tokens (USD)
 MODEL_PRICING: dict[str, dict[str, float]] = {
     "gpt-4o-mini": {"input": 0.15, "output": 0.60},
+    "gpt-4o": {"input": 2.50, "output": 10.00},
+    "gpt-3.5-turbo": {"input": 0.50, "output": 1.50},
 }
 
 # Rate-limit defaults (in-memory sliding window)

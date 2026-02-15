@@ -8,6 +8,7 @@ from prompts.be_prompt import BE_HUMAN, BE_SYSTEM
 from observability.langfuse_tracer import traced_call
 from observability.metrics import AGENT_CALLS, AGENT_ERRORS
 from scaling.config import calculate_cost
+from scaling.model_selector import get_model
 from scaling.rate_limiter import record_token_usage
 from security.guardrails import validate_output
 from state import AgentState
@@ -22,18 +23,20 @@ def run_be_executor(state: AgentState) -> AgentState:
         data_models=", ".join(state.get("data_models", [])),
     )
 
-    llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.2)
+    model = get_model("be_executor")
+    llm = ChatOpenAI(model=model, temperature=0.2)
     response = traced_call(
         llm, BE_SYSTEM, human_msg, agent_name="be_executor",
         job_id=state.get("job_id", ""), user_id=state.get("user_id", ""),
     )
 
+    model_used = getattr(response, "model_used", model)
     input_tokens = response.usage_metadata.get("input_tokens", 0) if response.usage_metadata else 0
     output_tokens = response.usage_metadata.get("output_tokens", 0) if response.usage_metadata else 0
     tokens_used = input_tokens + output_tokens
 
     # Cost tracking
-    call_cost = calculate_cost("gpt-4o-mini", input_tokens, output_tokens)
+    call_cost = calculate_cost(model_used, input_tokens, output_tokens)
     cost_breakdown = dict(state.get("cost_breakdown", {}))
     cost_breakdown["be_executor"] = cost_breakdown.get("be_executor", 0.0) + call_cost
     agent_tokens = dict(state.get("agent_tokens", {}))

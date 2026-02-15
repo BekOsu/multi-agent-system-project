@@ -8,6 +8,7 @@ from prompts.orchestrator_prompt import ORCHESTRATOR_HUMAN, ORCHESTRATOR_SYSTEM
 from observability.langfuse_tracer import traced_call
 from observability.metrics import AGENT_CALLS, AGENT_ERRORS, AGENT_RETRIES
 from scaling.config import AGENT_TOKEN_LIMITS, calculate_cost
+from scaling.model_selector import get_model
 from scaling.rate_limiter import check_rate_limit, record_token_usage
 from state import AgentState
 
@@ -46,18 +47,20 @@ def run_orchestrator(state: AgentState) -> AgentState:
         error=state.get("error", ""),
     )
 
-    llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
+    model = get_model("orchestrator")
+    llm = ChatOpenAI(model=model, temperature=0)
     response = traced_call(
         llm, ORCHESTRATOR_SYSTEM, human_msg, agent_name="orchestrator",
         job_id=state.get("job_id", ""), user_id=user_id,
     )
 
+    model_used = getattr(response, "model_used", model)
     input_tokens = response.usage_metadata.get("input_tokens", 0) if response.usage_metadata else 0
     output_tokens = response.usage_metadata.get("output_tokens", 0) if response.usage_metadata else 0
     tokens_used = input_tokens + output_tokens
 
     # Cost tracking
-    call_cost = calculate_cost("gpt-4o-mini", input_tokens, output_tokens)
+    call_cost = calculate_cost(model_used, input_tokens, output_tokens)
     cost_breakdown = dict(state.get("cost_breakdown", {}))
     cost_breakdown["orchestrator"] = cost_breakdown.get("orchestrator", 0.0) + call_cost
     agent_tokens = dict(state.get("agent_tokens", {}))
@@ -84,6 +87,7 @@ def run_orchestrator(state: AgentState) -> AgentState:
         "cost_breakdown": cost_breakdown,
         "agent_tokens": agent_tokens,
         "done": next_agent == "done",
+        "model_used": model_used,
     }
 
     # If routing back after validation failure, bump retry count

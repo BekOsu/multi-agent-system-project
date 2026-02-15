@@ -33,5 +33,8 @@ class AgentState(TypedDict, total=False):
     cost_breakdown: dict[str, float]  # per-agent cost in USD
     # Per-agent token tracking
     agent_tokens: dict[str, int]  # per-agent cumulative tokens
+    # Model selection
+    model_used: str  # last model used for LLM call
+    job_status: str  # "pending" | "running" | "completed" | "failed"
     # Security
     security_warnings: list[str]

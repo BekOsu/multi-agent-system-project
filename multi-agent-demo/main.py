@@ -19,6 +19,7 @@ from observability.metrics import (
     JOB_DURATION,
 )
 from scaling.config import JOB_TOKEN_BUDGET
+from persistence.job_store import create_job, update_job, list_jobs
 
 DEFAULT_REQUEST = "Build a todo app with user authentication, task CRUD, and a dashboard"
 
@@ -38,12 +39,36 @@ def _print_cost_summary(state: dict) -> None:
     print(f"  {'-'*40}")
     print(f"  {'TOTAL':<16} {state.get('total_tokens', 0):>10,} ${state.get('cost_usd', 0.0):>11.6f}")
 
+    if state.get("model_used"):
+        print(f"\n  Model: {state['model_used']}")
+
     # Security warnings
     warnings = state.get("security_warnings", [])
     if warnings:
         print(f"\n  Security warnings: {len(warnings)}")
         for w in warnings:
             print(f"    {w}")
+
+
+def _print_job_history(user_id: str | None = None) -> None:
+    """Print recent job history as a table."""
+    jobs = list_jobs(user_id=user_id)
+    if not jobs:
+        print("No jobs found.")
+        return
+
+    print(f"\n{'='*90}")
+    print(f"  {'Job ID':<10} {'Status':<12} {'Tokens':>10} {'Cost':>10} {'Model':<16} {'Created':<20}")
+    print(f"  {'-'*86}")
+    for job in jobs:
+        created = job.created_at.strftime("%Y-%m-%d %H:%M") if job.created_at else "—"
+        model = job.model_used or "—"
+        print(
+            f"  {job.id:<10} {job.status:<12} {job.total_tokens:>10,} "
+            f"${job.cost_usd:>9.6f} {model:<16} {created:<20}"
+        )
+    print(f"{'='*90}")
+    print(f"  {len(jobs)} job(s) shown\n")
 
 
 def run_interactive(user_request: str, user_id: str) -> None:
@@ -79,8 +104,13 @@ def run_interactive(user_request: str, user_id: str) -> None:
         "cost_usd": 0.0,
         "cost_breakdown": {},
         "agent_tokens": {},
+        "model_used": "",
+        "job_status": "running",
         "security_warnings": [],
     }
+
+    # Persist job start
+    create_job(initial_state)
 
     graph = build_graph()
 
@@ -115,6 +145,9 @@ def run_interactive(user_request: str, user_id: str) -> None:
     COST_PER_PROJECT.observe(final_state.get("cost_usd", 0.0))
     JOB_DURATION.observe(elapsed)
 
+    # Persist job completion
+    update_job(job_id, final_state)
+
     print(f"\n{'='*60}")
     print(f"Completed in {elapsed:.1f}s")
     print(f"Total tokens: {final_state.get('total_tokens', 0):,}")
@@ -140,10 +173,15 @@ def main():
     parser.add_argument("request", nargs="*", default=[], help="User request")
     parser.add_argument("--worker", action="store_true", help="Run as queue worker")
     parser.add_argument("--user-id", default="anonymous", help="User ID for rate limiting")
+    parser.add_argument("--list-jobs", action="store_true", help="List recent job history")
     args = parser.parse_args()
 
     # Start Prometheus metrics server
     start_metrics_server()
+
+    if args.list_jobs:
+        _print_job_history(user_id=args.user_id if args.user_id != "anonymous" else None)
+        return
 
     if args.worker:
         run_worker()

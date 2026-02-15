@@ -3,10 +3,15 @@ services:
   generator:
     build: .
     env_file: .env
+    environment:
+      - DATABASE_URL=postgresql://multiagent:multiagent@postgres:5432/multiagent
     ports:
       - "9090:9090"
     volumes:
       - ./output:/app/output
+    depends_on:
+      postgres:
+        condition: service_healthy
     profiles:
       - interactive
 
@@ -15,15 +20,37 @@ services:
     build: .
     command: ["python", "main.py", "--worker"]
     env_file: .env
+    environment:
+      - DATABASE_URL=postgresql://multiagent:multiagent@postgres:5432/multiagent
     ports:
       - "9091:9090"
     volumes:
       - ./output:/app/output
+    depends_on:
+      postgres:
+        condition: service_healthy
     deploy:
       replicas: 2
     restart: unless-stopped
     profiles:
       - worker
+
+  # PostgreSQL for persistent job history
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: multiagent
+      POSTGRES_PASSWORD: multiagent
+      POSTGRES_DB: multiagent
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U multiagent"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
 
   # Prometheus for metrics collection
   prometheus:
@@ -34,3 +61,6 @@ services:
       - ./prometheus.yml:/etc/prometheus/prometheus.yml
     profiles:
       - monitoring
+
+volumes:
+  pgdata:

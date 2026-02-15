@@ -1,6 +1,6 @@
 # Multi-Agent Code Generator
 
-A production-grade multi-agent system that generates full-stack applications (Next.js frontend + FastAPI backend) from natural language descriptions. Features security guardrails, cost controls, RAG context injection, stateless horizontal scaling, and deep observability.
+A production-grade multi-agent system that generates full-stack applications (Next.js frontend + FastAPI backend) from natural language descriptions. Features security guardrails, cost controls, RAG context injection, stateless horizontal scaling, deep observability, persistent job history, fallback model chains, and full Terraform infrastructure.
 
 ## Architecture: Orchestrator Pattern
 
@@ -64,6 +64,52 @@ validator              8,500    $0.006375
 TOTAL                 39,690    $0.029768
 ```
 
+### Fallback Model Chain
+
+Automatic model fallback on API errors (rate limits, model unavailability):
+
+```
+Chain: gpt-4o-mini → gpt-4o → gpt-3.5-turbo
+```
+
+- `traced_call()` retries with the next model in the chain on failure (max 3 attempts)
+- `MODEL_OVERRIDE` env var forces a specific model for all agents
+- Model pricing tracked per-model for accurate cost reporting
+
+```bash
+# Use default chain (gpt-4o-mini first)
+python main.py
+
+# Force a specific model
+MODEL_OVERRIDE=gpt-4o python main.py
+```
+
+### Persistent Job History
+
+PostgreSQL-backed job store records every run with metadata, status, and cost:
+
+- **Automatic recording** — Jobs are created at start and updated on completion
+- **SQLite fallback** — Works locally without PostgreSQL (`sqlite:///jobs.db`)
+- **Query history** — `--list-jobs` flag prints recent job table
+
+```bash
+# View recent jobs
+python main.py --list-jobs
+
+# View jobs for a specific user
+python main.py --list-jobs --user-id user123
+```
+
+```
+==========================================================================================
+  Job ID     Status          Tokens       Cost Model            Created
+  ------------------------------------------------------------------------------------------
+  a1b2c3d4   completed       39,690  $0.029768 gpt-4o-mini      2025-01-15 14:32
+  e5f6g7h8   failed           8,200  $0.006150 gpt-4o-mini      2025-01-15 13:10
+==========================================================================================
+  2 job(s) shown
+```
+
 ### Stateless Workers & Horizontal Scaling
 
 - **Queue Worker** — SQS-based stateless worker loop
@@ -97,17 +143,42 @@ TOTAL                 39,690    $0.029768
 | `agent_latency_seconds` | Histogram | agent | Per-agent call latency |
 | `queue_depth` | Gauge | — | Job queue depth (scaling signal) |
 
-**Langfuse** traces include `cost_usd`, `user_id`, `job_id` metadata per generation.
+**Langfuse** traces include `cost_usd`, `user_id`, `job_id`, `model_used` metadata per generation.
+
+### Terraform Infrastructure
+
+Full AWS infrastructure as code in `terraform/`:
+
+| Resource | Purpose |
+|----------|---------|
+| VPC | 2 public + 2 private subnets across AZs, NAT gateway |
+| ECR | Container registry with image scanning, lifecycle policy (keep 10) |
+| ECS Fargate | Cluster + service running workers in private subnets |
+| SQS | Job queue (30s visibility, 14-day retention) + dead-letter queue |
+| ALB | Application load balancer exposing Prometheus metrics |
+| Autoscaling | Scale ECS tasks on SQS queue depth (out >10, in <2) |
+| IAM | Least-privilege roles for task execution and task runtime |
+| CloudWatch | Log groups (30-day retention), DLQ alarm, backlog alarm |
+
+```bash
+cd multi-agent-demo/terraform
+cp terraform.tfvars.example terraform.tfvars
+# Edit terraform.tfvars with your values
+
+terraform init
+terraform plan
+terraform apply
+```
 
 ## Project Structure
 
 ```
 multi-agent-demo/
 ├── Dockerfile                      # Python 3.12-slim container
-├── docker-compose.yml              # Interactive, worker, and monitoring profiles
+├── docker-compose.yml              # Interactive, worker, postgres, monitoring
 ├── prometheus.yml                  # Prometheus scrape config
 ├── .dockerignore
-├── main.py                         # Entry point (interactive + worker modes)
+├── main.py                         # Entry point (interactive + worker + --list-jobs)
 ├── graph.py                        # LangGraph definition with guardrail middleware
 ├── state.py                        # Shared AgentState TypedDict
 ├── requirements.txt
@@ -122,21 +193,38 @@ multi-agent-demo/
 │   ├── guardrails.py               # 6 security layers
 │   └── schemas.py                  # Pydantic output schemas
 ├── scaling/
-│   ├── config.py                   # Token limits, pricing, rate-limit config
+│   ├── config.py                   # Token limits, model chain, pricing, rate-limit config
+│   ├── model_selector.py           # Fallback model chain + MODEL_OVERRIDE
 │   ├── rate_limiter.py             # Per-user sliding-window rate limiter
 │   └── queue_worker.py             # SQS/local stateless queue worker
+├── persistence/
+│   ├── models.py                   # SQLAlchemy Job model
+│   └── job_store.py                # PostgreSQL/SQLite CRUD for job history
 ├── rag/
 │   ├── vector_store.py             # ChromaDB vector store + seed examples
 │   └── context_injector.py         # RAG → planner prompt injection
 ├── observability/
 │   ├── metrics.py                  # Prometheus metrics (cost, queue, retries)
-│   └── langfuse_tracer.py          # LLM tracing with cost/user metadata
+│   └── langfuse_tracer.py          # LLM tracing with fallback retry logic
 ├── prompts/
 │   ├── orchestrator_prompt.py
 │   ├── planner_prompt.py           # Includes {rag_context} placeholder
 │   ├── fe_prompt.py
 │   ├── be_prompt.py
 │   └── validator_prompt.py
+├── terraform/
+│   ├── main.tf                     # Provider, backend, locals
+│   ├── variables.tf                # Input variables
+│   ├── outputs.tf                  # ALB URL, SQS URL, ECR URI
+│   ├── vpc.tf                      # VPC, subnets, IGW, NAT, route tables
+│   ├── ecr.tf                      # ECR repository + lifecycle policy
+│   ├── ecs.tf                      # ECS cluster, task def, Fargate service
+│   ├── sqs.tf                      # SQS queue + dead-letter queue
+│   ├── alb.tf                      # ALB + target group + listener
+│   ├── autoscaling.tf              # ECS autoscaling on SQS queue depth
+│   ├── iam.tf                      # Task execution + task roles
+│   ├── cloudwatch.tf               # Log groups, SQS alarms
+│   └── terraform.tfvars.example    # Example variable values
 ├── tools/
 │   └── file_writer.py              # Sandboxed artifact writer with review gate
 └── output/                         # Generated artifacts
@@ -163,6 +251,12 @@ python main.py "build an e-commerce site with cart and checkout"
 # Run with user ID for rate limiting
 python main.py --user-id user123 "build a blog with comments"
 
+# View job history
+python main.py --list-jobs
+
+# Force a specific model
+MODEL_OVERRIDE=gpt-4o python main.py
+
 # Run in queue worker mode (local queue for demo)
 python main.py --worker
 
@@ -183,6 +277,7 @@ cp .env.example .env
 docker compose build
 
 # Run interactive mode (generate code, then exit)
+# Starts PostgreSQL automatically
 docker compose --profile interactive run generator "build a todo app"
 
 # Run 2 queue workers (long-running, polls for jobs)
@@ -221,3 +316,6 @@ Generated code is written to `multi-agent-demo/output/`:
 6. **Defense in depth** — 6 security layers from input sanitization to output validation to path sandboxing
 7. **Cost transparency** — per-agent USD cost tracking with real-time model pricing
 8. **Container-ready** — Dockerfile + Compose with profiles for interactive, worker, and monitoring modes
+9. **Fallback resilience** — model chain with automatic retry on API errors (gpt-4o-mini → gpt-4o → gpt-3.5-turbo)
+10. **Persistent history** — PostgreSQL job store with SQLite fallback, queryable via `--list-jobs`
+11. **Infrastructure as code** — Full AWS deployment via Terraform (ECS Fargate, SQS, ECR, VPC, ALB, autoscaling)
