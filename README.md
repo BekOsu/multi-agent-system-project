@@ -29,7 +29,7 @@ A production-grade multi-agent system that generates full-stack applications (Ne
 
 ## Production Features
 
-### Security & Guardrails (`security/`)
+### Security & Guardrails
 
 Six security layers protect the system:
 
@@ -44,7 +44,7 @@ Six security layers protect the system:
 
 Set `REQUIRE_HUMAN_REVIEW=true` to pause before writing artifacts when risky patterns are found.
 
-### Cost Controls (`scaling/config.py`)
+### Cost Controls
 
 - **Per-agent token limits** — Each agent has a cumulative token cap (e.g., planner: 10K, executors: 30K each)
 - **Job-level token budget** — 200K tokens total per run
@@ -64,23 +64,23 @@ validator              8,500    $0.006375
 TOTAL                 39,690    $0.029768
 ```
 
-### Stateless Workers & Horizontal Scaling (`scaling/`)
+### Stateless Workers & Horizontal Scaling
 
-- **Queue Worker** (`queue_worker.py`) — SQS-based stateless worker loop
+- **Queue Worker** — SQS-based stateless worker loop
   - Workers are stateless: all state travels in the message body (AgentState serialized as JSON)
   - `LocalQueue` (in-memory deque) included for local demo without AWS
   - Graceful shutdown on SIGTERM
   - Exposes `queue_depth` Prometheus gauge for autoscaling (ASG/HPA)
-- **Rate Limiter** (`rate_limiter.py`) — Sliding window per user_id
+- **Rate Limiter** — Sliding window per user_id
   - Configurable requests/minute and tokens/hour
   - In-memory for demo (swap Redis for production)
 
-### RAG Context Injection (`rag/`)
+### RAG Context Injection
 
-- **Vector Store** (`vector_store.py`) — ChromaDB local persistent collection
+- **Vector Store** — ChromaDB local persistent collection
   - Pre-loaded with example patterns: todo apps, e-commerce, auth, dashboards
   - Cosine similarity search for top-k relevant chunks
-- **Context Injector** (`context_injector.py`) — Queries vector store, formats results as a context block
+- **Context Injector** — Queries vector store, formats results as a context block
 - **Planner integration** — Retrieved examples injected into the planner prompt before LLM call
 
 ### Observability
@@ -103,6 +103,10 @@ TOTAL                 39,690    $0.029768
 
 ```
 multi-agent-demo/
+├── Dockerfile                      # Python 3.12-slim container
+├── docker-compose.yml              # Interactive, worker, and monitoring profiles
+├── prometheus.yml                  # Prometheus scrape config
+├── .dockerignore
 ├── main.py                         # Entry point (interactive + worker modes)
 ├── graph.py                        # LangGraph definition with guardrail middleware
 ├── state.py                        # Shared AgentState TypedDict
@@ -141,6 +145,8 @@ multi-agent-demo/
 ## Quick Start
 
 ```bash
+cd multi-agent-demo
+
 # Install dependencies
 pip install -r requirements.txt
 
@@ -167,9 +173,14 @@ REQUIRE_HUMAN_REVIEW=true python main.py
 ## Docker
 
 ```bash
+cd multi-agent-demo
+
 # Configure API keys first
 cp .env.example .env
 # Edit .env with your OpenAI key
+
+# Build the image
+docker compose build
 
 # Run interactive mode (generate code, then exit)
 docker compose --profile interactive run generator "build a todo app"
@@ -182,13 +193,19 @@ docker compose --profile worker --profile monitoring up -d
 # Prometheus UI → http://localhost:9092
 # Worker metrics → http://localhost:9091/metrics
 
+# View worker logs
+docker compose --profile worker logs -f
+
+# Scale workers up/down
+docker compose --profile worker up -d --scale worker=4
+
 # Stop everything
 docker compose --profile worker --profile monitoring down
 ```
 
 ## Output
 
-Generated code is written to `output/`:
+Generated code is written to `multi-agent-demo/output/`:
 - `output/frontend/` — Next.js pages and components
 - `output/backend/` — FastAPI app and models
 - `output/SPEC.md` — The planner's specification
@@ -200,6 +217,7 @@ Generated code is written to `output/`:
 2. **Validator routes failures** — returns a target agent for the Orchestrator to re-invoke
 3. **Budget + retry caps** — stops after 3 retries or 200K tokens, with per-agent limits
 4. **Graceful degradation** — Langfuse tracing is optional; metrics server is optional; ChromaDB is optional
-5. **Stateless workers** — all state serialized in message body, enabling horizontal scaling
+5. **Stateless workers** — all state serialized in message body, enabling horizontal scaling via Docker replicas or SQS
 6. **Defense in depth** — 6 security layers from input sanitization to output validation to path sandboxing
 7. **Cost transparency** — per-agent USD cost tracking with real-time model pricing
+8. **Container-ready** — Dockerfile + Compose with profiles for interactive, worker, and monitoring modes
