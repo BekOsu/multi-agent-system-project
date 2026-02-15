@@ -1,0 +1,36 @@
+services:
+  # Interactive mode — run once, generate code
+  generator:
+    build: .
+    env_file: .env
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./output:/app/output
+    profiles:
+      - interactive
+
+  # Queue worker mode — long-running, polls for jobs
+  worker:
+    build: .
+    command: ["python", "main.py", "--worker"]
+    env_file: .env
+    ports:
+      - "9091:9090"
+    volumes:
+      - ./output:/app/output
+    deploy:
+      replicas: 2
+    restart: unless-stopped
+    profiles:
+      - worker
+
+  # Prometheus for metrics collection
+  prometheus:
+    image: prom/prometheus:latest
+    ports:
+      - "9092:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+    profiles:
+      - monitoring

@@ -164,6 +164,28 @@ python main.py --worker
 REQUIRE_HUMAN_REVIEW=true python main.py
 ```
 
+## Docker
+
+```bash
+# Configure API keys first
+cp .env.example .env
+# Edit .env with your OpenAI key
+
+# Run interactive mode (generate code, then exit)
+docker compose --profile interactive run generator "build a todo app"
+
+# Run 2 queue workers (long-running, polls for jobs)
+docker compose --profile worker up -d
+
+# Run with Prometheus monitoring
+docker compose --profile worker --profile monitoring up -d
+# Prometheus UI → http://localhost:9092
+# Worker metrics → http://localhost:9091/metrics
+
+# Stop everything
+docker compose --profile worker --profile monitoring down
+```
+
 ## Output
 
 Generated code is written to `output/`:
